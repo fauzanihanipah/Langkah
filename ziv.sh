@@ -52,7 +52,7 @@ create_user() {
     echo -e "  Host IP    : ${YELLOW}$MYIP${NC}"
     echo -e "  Username   : ${YELLOW}$user${NC}"
     echo -e "  Password   : ${YELLOW}$pass${NC}"
-    echo -e "  UDP Port   : ${YELLOW}7100, 7200, 7300${NC}"
+    echo -e "  UDP Port   : ${YELLOW}1-65535${NC}"
     echo -e "  Expired    : ${RED}$(date -d "$days days" +"%d %b %Y")${NC}"
     echo -e "${CYAN}----------------------------------------------------------${NC}"
     echo -e "  Config : ${CYAN}$user:$pass@$MYIP:22${NC}"
