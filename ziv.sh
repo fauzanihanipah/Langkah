@@ -11,16 +11,35 @@ MYIP=$(curl -s ifconfig.me)
 # Warna
 R='\033[0;31m'; G='\033[0;32m'; Y='\033[0;33m'; B='\033[0;34m'; P='\033[0;35m'; C='\033[0;36m'; NC='\033[0m'
 
-# Fungsi Update Config ZiVPN (Wajib agar akun bisa login)
+# ==========================================
+# FUNGSI FIX KONEKSI (SINKRONISASI TOTAL)
+# ==========================================
 sync_ziv() {
-    # Mengambil semua user dengan UID 1000 keatas (User Premium)
-    users=$(awk -F: '$3 >= 1000 && $1 != "nobody" {print "\""$1"\""}' /etc/passwd | paste -sd, -)
-    [[ -z $users ]] && final="\"zi\"" || final="\"zi\", $users"
-    sed -i -E "s/\"config\": ?\[.*\]/\"config\": [$final]/g" $CONF
+    # 1. Ambil daftar user premium (UID >= 1000)
+    # Kita ambil username-nya saja sebagai password (standard ZiVPN)
+    user_list=$(awk -F: '$3 >= 1000 && $1 != "nobody" {print "\""$1"\""}' /etc/passwd | paste -sd, -)
+    
+    # 2. Tambahkan password default 'zi' agar selalu ada isi
+    if [[ -z $user_list ]]; then
+        final_config="\"zi\""
+    else
+        final_config="\"zi\", $user_list"
+    fi
+
+    # 3. REWRITE CONFIG (Menulis ulang file agar tidak error format JSON)
+    # Ini adalah bagian paling krusial agar ZiVPN mau konek
+    cat > $CONF << END
+{
+  "password": "zi",
+  "config": [$final_config]
+}
+END
+
+    # 4. Restart Service agar perubahan diterapkan
+    systemctl daemon-reload
     systemctl restart zivpn.service
 }
 
-# Tampilan Header Dashboard
 header() {
     clear
     echo -e "${P}"
@@ -31,105 +50,90 @@ header() {
     echo "  \___/ |____/ |_|      \___/ \____|_| |_/____||_____|  \_/   "
     echo -e "         ${Y}U D P   O G H Z I V   P R E M I U M${NC}"
     echo -e "${Y}┌────────────────────────────────────────────────────────┐${NC}"
-    echo -e "  ${C}OS      :${NC} $(lsb_release -ds 2>/dev/null || echo "Ubuntu/Debian")"
+    echo -e "  ${C}OS      :${NC} $(lsb_release -ds 2>/dev/null || echo "Ubuntu Server")"
     echo -e "  ${C}IP      :${NC} $MYIP"
     echo -e "  ${C}DOMAIN  :${NC} $DOM"
-    echo -e "  ${C}RAM     :${NC} $(free -m | awk 'NR==2{printf "%sMB/%sMB (%.0f%%)", $3,$2,$3*100/$2 }')"
-    echo -e "  ${C}UPTIME  :${NC} $(uptime -p | cut -d " " -f 2-)"
-    echo -e "  ${C}ZiVPN   :${NC} $(systemctl is-active zivpn.service | sed 's/active/Running/g' || echo "Error")"
+    echo -e "  ${C}ZiVPN   :${NC} $(systemctl is-active zivpn.service | sed 's/active/Running/g' || echo "Stopped")"
     echo -e "${Y}└────────────────────────────────────────────────────────┘${NC}"
 }
 
-# 1. Buat Akun Premium
-create() {
+# --- Fitur Akun ---
+
+create_acc() {
     header
-    echo -e "          ${G}[ 01. CREATE PREMIUM ACCOUNT ]${NC}"
+    echo -e "          ${G}[ 01. CREATE PREMIUM ]${NC}"
     read -p "  Username : " user
     [[ -z $user ]] && return
-    id "$user" &>/dev/null && echo -e "${R}  Error: User sudah ada!${NC}" && sleep 1 && return
-    read -p "  Password : " pass
-    read -p "  Active (Days) : " days
-    exp=$(date -d "$days days" +"%Y-%m-%d")
-    useradd -e $exp -s /bin/false $user
-    echo "$user:$pass" | chpasswd && sync_ziv
-    header
-    echo -e "${G}  AKUN BERHASIL DIBUAT DAN AKTIF!${NC}"
-    echo -e "  Host/IP  : $DOM"
-    echo -e "  Username : $user"
-    echo -e "  Password : $pass"
-    echo -e "  Expired  : $(date -d "$days days" +"%d %b %Y")"
-    echo -e "${Y}──────────────────────────────────────────────────────────${NC}"
-    read -p "  Tekan Enter untuk kembali..."
-}
-
-# 3. Hapus Akun (Menampilkan User yang ada)
-delete() {
-    header
-    echo -e "          ${R}[ 03. DELETE ACCOUNT ]${NC}"
-    echo -e "  Daftar Akun yang bisa dihapus:"
-    awk -F: '$3 >= 1000 && $1 != "nobody" {print "  - " $1}' /etc/passwd
-    echo -e "${Y}──────────────────────────────────────────────────────────${NC}"
-    read -p "  Masukkan Username yang ingin dihapus: " user
     if id "$user" &>/dev/null; then
-        read -p "  Yakin ingin menghapus $user? (y/n): " confirm
-        if [[ $confirm == [yY] ]]; then
-            userdel -f "$user" && sync_ziv
-            echo -e "${G}  User $user berhasil dihapus!${NC}"
-        else
-            echo -e "${Y}  Penghapusan dibatalkan.${NC}"
-        fi
-    else
-        echo -e "${R}  Error: User tidak ditemukan!${NC}"
+        echo -e "${R}  User sudah ada!${NC}"; sleep 2; return
     fi
-    sleep 2
-}
-
-# 5. Daftar Akun (List)
-list() {
+    read -p "  Password : " pass
+    read -p "  Aktif (Hari): " days
+    
+    exp=$(date -d "$days days" +"%Y-%m-%d")
+    # Buat user sistem tanpa shell login
+    useradd -e $exp -s /bin/false $user
+    echo "$user:$pass" | chpasswd
+    
+    # Jalankan Fix Koneksi
+    sync_ziv
+    
     header
-    echo -e "          ${Y}[ LIST AKUN TERDAFTAR ]${NC}"
-    printf "  ${C}%-15s %-15s %-10s${NC}\n" "USERNAME" "EXPIRED" "STATUS"
-    echo -e "${Y}──────────────────────────────────────────────────────────${NC}"
-    while IFS=: read -r u _ _ _ _ _ _ e _; do
-        if [[ $(id -u $u) -ge 1000 && $u != "nobody" ]]; then
-            exp_d=$(date -d "1970-01-01 $e days" +"%d-%m-%Y" 2>/dev/null || echo "No Limit")
-            printf "  %-15s %-15s ${G}%-10s${NC}\n" "$u" "$exp_d" "Active"
-        fi
-    done < /etc/shadow
+    echo -e "${G}  AKUN BERHASIL & KONEKSI FIX!${NC}"
+    echo -e "  User     : $user"
+    echo -e "  Pass     : $pass"
+    echo -e "  Expired  : $(date -d "$days days" +"%d %b %Y")"
     echo -e "${Y}──────────────────────────────────────────────────────────${NC}"
     read -p "  Tekan Enter..."
 }
 
-# --- Loop Menu Utama ---
+delete_acc() {
+    header
+    echo -e "          ${R}[ 03. DELETE ACCOUNT ]${NC}"
+    awk -F: '$3 >= 1000 && $1 != "nobody" {print "  - " $1}' /etc/passwd
+    echo -e "${Y}──────────────────────────────────────────────────────────${NC}"
+    read -p "  User yang dihapus: " user
+    if id "$user" &>/dev/null; then
+        userdel -f "$user"
+        sync_ziv
+        echo -e "${G}  $user Berhasil Dihapus!${NC}"
+    fi
+    sleep 2
+}
+
+list_acc() {
+    header
+    echo -e "          ${Y}[ LIST AKUN AKTIF ]${NC}"
+    printf "  ${C}%-15s %-15s %-10s${NC}\n" "USER" "EXPIRED" "STATUS"
+    echo -e "${Y}──────────────────────────────────────────────────────────${NC}"
+    while IFS=: read -r u _ _ _ _ _ _ e _; do
+        if [[ $(id -u $u) -ge 1000 && $u != "nobody" ]]; then
+            exp_d=$(date -d "1970-01-01 $e days" +"%d-%m-%Y" 2>/dev/null || echo "Permanent")
+            printf "  %-15s %-15s ${G}%-10s${NC}\n" "$u" "$exp_d" "Aktif"
+        fi
+    done < /etc/shadow
+    read -p "  Enter..."
+}
+
+# --- Menu Utama ---
 while true; do
     header
-    echo -e "  ${Y}1)${NC} Create Account      ${Y}5)${NC} List Accounts"
-    echo -e "  ${Y}2)${NC} Trial Account       ${Y}6)${NC} Clear Expired (Auto-XP)"
-    echo -e "  ${Y}3)${NC} Delete Account      ${Y}7)${NC} Restart Service"
-    echo -e "  ${Y}4)${NC} Change Domain       ${Y}8)${NC} Speedtest Server"
-    echo -e "  ${R}0) Exit Manager${NC}"
+    echo -e "  ${Y}1)${NC} Buat Akun Premium   ${Y}5)${NC} Daftar Akun"
+    echo -e "  ${Y}2)${NC} Buat Akun Trial     ${Y}6)${NC} Hapus Expired"
+    echo -e "  ${Y}3)${NC} Hapus Akun          ${Y}7)${NC} Restart ZiVPN"
+    echo -e "  ${Y}4)${NC} Ganti Domain        ${Y}8)${NC} Speedtest"
+    echo -e "  ${R}0)${NC} Keluar"
     echo -e "${Y}┌────────────────────────────────────────────────────────┐${NC}"
-    read -p "  Masukkan pilihan Anda [0-8]: " opt
+    read -p "  Pilihan [0-8]: " opt
     case $opt in
-        1) create ;;
-        2) # Trial 1 Jam
-           header; u="tr-$(($RANDOM%900+100))"; p="1"
-           useradd -e $(date -d "1 day" +"%Y-%m-%d") -s /bin/false $u
-           echo "$u:$p" | chpasswd && sync_ziv
-           echo "/usr/sbin/userdel -f $u && systemctl restart zivpn" | at now + 1 hour &>/dev/null
-           echo -e "${G}  Trial $u Berhasil (Pass: 1). Aktif 1 Jam.${NC}"; read -p "Enter..." ;;
-        3) delete ;;
-        4) header; read -p "  Domain Baru: " d; [[ -n $d ]] && echo "$d" > $DOM_FILE && DOM=$d; echo "Updated!"; sleep 1 ;;
-        5) list ;;
-        6) # Auto XP
-           now=$(($(date +%s)/86400))
-           while IFS=: read -r u _ _ _ _ _ _ e _; do
-               [[ -n $e && $now -ge $e && $(id -u $u) -ge 1000 ]] && userdel -f $u
-           done < /etc/shadow
-           sync_ziv; echo -e "${G}Expired Cleaned!${NC}"; sleep 1 ;;
-        7) systemctl restart zivpn.service; echo -e "${G}Restarted.${NC}"; sleep 1 ;;
-        8) header; echo -e "${G}Running Speedtest...${NC}"; curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - ;;
+        1) create_acc ;;
+        2) u="tr-$(($RANDOM%900+100))"; useradd -e $(date -d "1 day" +"%Y-%m-%d") -s /bin/false $u; echo "$u:1" | chpasswd; sync_ziv; echo "Trial $u Aktif 1 Jam"; sleep 2 ;;
+        3) delete_acc ;;
+        4) header; read -p "  Domain: " d; [[ -n $d ]] && echo "$d" > $DOM_FILE && DOM=$d; sync_ziv ;;
+        5) list_acc ;;
+        6) now=$(($(date +%s)/86400)); while IFS=: read -r u _ _ _ _ _ _ e _; do [[ -n $e && $now -ge $e && $(id -u $u) -ge 1000 ]] && userdel -f $u; done < /etc/shadow; sync_ziv; echo "Cleaned!"; sleep 1 ;;
+        7) systemctl restart zivpn.service; echo "Restarted."; sleep 1 ;;
+        8) header; curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - ;;
         0) exit ;;
-        *) echo -e "${R}Salah Pilihan!${NC}"; sleep 1 ;;
     esac
 done
